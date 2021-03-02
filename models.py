@@ -44,7 +44,7 @@ class BiDAF(nn.Module):
         self.att = layers.BiDAFAttention(hidden_size=2 * hidden_size,
                                          drop_prob=drop_prob)
 
-        self.mod = layers.RNNEncoder(input_size=6  * hidden_size, # changed from 8 to 6
+        self.mod = layers.RNNEncoder(input_size=8  * hidden_size, # changed from 8 to 6
                                      hidden_size=hidden_size,
                                      num_layers=2,
                                      drop_prob=drop_prob)

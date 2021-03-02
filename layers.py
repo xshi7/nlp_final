@@ -167,15 +167,6 @@ class BiDAFAttention(nn.Module):
     """
     def __init__(self, hidden_size, drop_prob=0.1):
         super(BiDAFAttention, self).__init__()
-        # self.drop_prob = drop_prob
-        # self.c_weight = nn.Parameter(torch.zeros(hidden_size, 1))
-        # self.q_weight = nn.Parameter(torch.zeros(hidden_size, 1))
-        # self.cq_weight = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        # for weight in (self.c_weight, self.q_weight, self.cq_weight):
-        #     nn.init.xavier_uniform_(weight)
-        # self.bias = nn.Parameter(torch.zeros(1))
-
-        # coattention version
         self.drop_prob = drop_prob
         self.c_weight = nn.Parameter(torch.zeros(hidden_size, 1))
         self.q_weight = nn.Parameter(torch.zeros(hidden_size, 1))
@@ -183,42 +174,33 @@ class BiDAFAttention(nn.Module):
         for weight in (self.c_weight, self.q_weight, self.cq_weight):
             nn.init.xavier_uniform_(weight)
         self.bias = nn.Parameter(torch.zeros(1))
-        ## qj = tanh(Wq + b)
-        ## l is the dimension of q states, emb dim 1
+
+        # coattention version
+        # self.drop_prob = drop_prob
+        # self.c_weight = nn.Parameter(torch.zeros(hidden_size, 1))
+        # self.q_weight = nn.Parameter(torch.zeros(hidden_size, 1))
+        # self.cq_weight = nn.Parameter(torch.zeros(1, 1, hidden_size))
+        # for weight in (self.c_weight, self.q_weight, self.cq_weight):
+        #     nn.init.xavier_uniform_(weight)
+        # self.bias = nn.Parameter(torch.zeros(1))
+        # ## qj = tanh(Wq + b)
+        # ## l is the dimension of q states, emb dim 1
         
-        self.coatt_weight = nn.Parameter(torch.zeros(hidden_size, hidden_size))
-        self.coatt_bias = nn.Parameter(torch.zeros(hidden_size))
-        self.q0 = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        self.c0 = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        self.rnn = nn.LSTM(hidden_size*2, hidden_size*2, 1,
-                           batch_first=True,
-                           bidirectional=True,
-                           dropout=0.)
+        # self.coatt_weight = nn.Parameter(torch.zeros(hidden_size, hidden_size))
+        # self.coatt_bias = nn.Parameter(torch.zeros(hidden_size))
+        # self.q0 = nn.Parameter(torch.zeros(1, 1, hidden_size))
+        # self.c0 = nn.Parameter(torch.zeros(1, 1, hidden_size))
+        # self.rnn = nn.LSTM(hidden_size*2, hidden_size*2, 1,
+        #                    batch_first=True,
+        #                    bidirectional=True,
+        #                    dropout=0.)
 
     def forward(self, c, q, c_mask, q_mask):
-        # batch_size, c_len, _ = c.size()
-        # q_len = q.size(1)
-        # s = self.get_similarity_matrix(c, q)        # (batch_size, c_len, q_len)
-        # c_mask = c_mask.view(batch_size, c_len, 1)  # (batch_size, c_len, 1)
-        # q_mask = q_mask.view(batch_size, 1, q_len)  # (batch_size, 1, q_len)
-        # s1 = masked_softmax(s, q_mask, dim=2)       # (batch_size, c_len, q_len)
-        # s2 = masked_softmax(s, c_mask, dim=1)       # (batch_size, c_len, q_len)
-
-        # # (bs, c_len, q_len) x (bs, q_len, hid_size) => (bs, c_len, hid_size)
-        # a = torch.bmm(s1, q)
-        # # (bs, c_len, c_len) x (bs, c_len, hid_size) => (bs, c_len, hid_size)
-        # b = torch.bmm(torch.bmm(s1, s2.transpose(1, 2)), c)
-
-        # x = torch.cat([c, a, c * a, c * b], dim=2)  # (bs, c_len, 4 * hid_size)
-
-        # return x
-
-        #oattention version 
         batch_size, c_len, _ = c.size()
         q_len = q.size(1)
         s = self.get_similarity_matrix(c, q)        # (batch_size, c_len, q_len)
         c_mask = c_mask.view(batch_size, c_len, 1)  # (batch_size, c_len, 1)
-        q_mask = q_mask.view(batch_size, 1, q_len)  # (batch_size, 1, q_len)   only 1d
+        q_mask = q_mask.view(batch_size, 1, q_len)  # (batch_size, 1, q_len)
         s1 = masked_softmax(s, q_mask, dim=2)       # (batch_size, c_len, q_len)
         s2 = masked_softmax(s, c_mask, dim=1)       # (batch_size, c_len, q_len)
 
@@ -229,70 +211,88 @@ class BiDAFAttention(nn.Module):
 
         x = torch.cat([c, a, c * a, c * b], dim=2)  # (bs, c_len, 4 * hid_size)
 
+        return x
+
+        #oattention version 
+    #     batch_size, c_len, _ = c.size()
+    #     q_len = q.size(1)
+    #     s = self.get_similarity_matrix(c, q)        # (batch_size, c_len, q_len)
+    #     c_mask = c_mask.view(batch_size, c_len, 1)  # (batch_size, c_len, 1)
+    #     q_mask = q_mask.view(batch_size, 1, q_len)  # (batch_size, 1, q_len)   only 1d
+    #     s1 = masked_softmax(s, q_mask, dim=2)       # (batch_size, c_len, q_len)
+    #     s2 = masked_softmax(s, c_mask, dim=1)       # (batch_size, c_len, q_len)
+
+    #     # (bs, c_len, q_len) x (bs, q_len, hid_size) => (bs, c_len, hid_size)
+    #     a = torch.bmm(s1, q)
+    #     # (bs, c_len, c_len) x (bs, c_len, hid_size) => (bs, c_len, hid_size)
+    #     b = torch.bmm(torch.bmm(s1, s2.transpose(1, 2)), c)
+
+    #     x = torch.cat([c, a, c * a, c * b], dim=2)  # (bs, c_len, 4 * hid_size)
+
         
-        ## draft downwards
-        ## q' = tanh(Wq + b)
-        #orch.matmul(c, self.c_weight).expand([-1, -1, q_len])
+    #     ## draft downwards
+    #     ## q' = tanh(Wq + b)
+    #     #orch.matmul(c, self.c_weight).expand([-1, -1, q_len])
         
-        q2 = F.tanh(torch.matmul(q, self.coatt_weight) + self.coatt_bias).view(q.size())
+    #     q2 = F.tanh(torch.matmul(q, self.coatt_weight) + self.coatt_bias).view(q.size())
 
-        c = torch.cat([c, self.c0.expand(batch_size, 1, c.size()[2])], dim = 1)
-        q2 = torch.cat([q2, self.q0.expand(batch_size, 1, q2.size()[2])], dim = 1)
-        #q2 = q2.transpose(1,2) #B x n + 1 x l
+    #     c = torch.cat([c, self.c0.expand(batch_size, 1, c.size()[2])], dim = 1)
+    #     q2 = torch.cat([q2, self.q0.expand(batch_size, 1, q2.size()[2])], dim = 1)
+    #     #q2 = q2.transpose(1,2) #B x n + 1 x l
 
-        #print(q2.shape, c.shape)
-        ## Lij = cj^t qj'
-        L = torch.bmm(q2, c.transpose(1,2)) #(m+1 n+1)
-        q_mask = torch.cat([q_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8).cuda()], dim = 2) ### cuda
-        c_mask = torch.cat([c_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8).cuda()], dim = 1)
-        # q_mask = torch.cat([q_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8)], dim = 2) ### cuda
-        # c_mask = torch.cat([c_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8)], dim = 1)
+    #     #print(q2.shape, c.shape)
+    #     ## Lij = cj^t qj'
+    #     L = torch.bmm(q2, c.transpose(1,2)) #(m+1 n+1)
+    #     q_mask = torch.cat([q_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8).cuda()], dim = 2) ### cuda
+    #     c_mask = torch.cat([c_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8).cuda()], dim = 1)
+    #     # q_mask = torch.cat([q_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8)], dim = 2) ### cuda
+    #     # c_mask = torch.cat([c_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8)], dim = 1)
 
-        ## a = softmax(Li:)
-        ##print(L.shape, q_mask.shape)
-        alpha = masked_softmax(L, q_mask.transpose(1,2), dim = 2) #(m+1 n+1)
-                ## a = sum aj qj
-        a = torch.bmm(c.transpose(1,2), alpha.transpose(1,2)) # b, l, n+1
+    #     ## a = softmax(Li:)
+    #     ##print(L.shape, q_mask.shape)
+    #     alpha = masked_softmax(L, q_mask.transpose(1,2), dim = 2) #(m+1 n+1)
+    #             ## a = sum aj qj
+    #     a = torch.bmm(c.transpose(1,2), alpha.transpose(1,2)) # b, l, n+1
 
-        beta = masked_softmax(L, c_mask.transpose(1,2), dim = 1) #(n+1 m+1)
+    #     beta = masked_softmax(L, c_mask.transpose(1,2), dim = 1) #(n+1 m+1)
 
-        #b = torch.bmm(beta, c)
-        #s = torch.bmm(alpha.transpose(1,2), b)
-        s = torch.bmm(torch.cat((q2.transpose(1,2), a), 1), beta)
-        s =  torch.bmm(torch.cat((q2.transpose(1,2), a), 1), beta).transpose(1,2)
-        #s = s[:, :-1, :]
-        s = torch.cat((s, c), 2) # B x m + 1 x 3l
-        s = F.dropout(s, self.drop_prob, self.training)
-        s = s[:, :-1, :]
-        #u = nn.LSTM(torch.cat([s, a], dim=2))
-        #u = torch.cat([s[:,:-1,:],a[:,:-1,:]], dim = 2)
+    #     #b = torch.bmm(beta, c)
+    #     #s = torch.bmm(alpha.transpose(1,2), b)
+    #     s = torch.bmm(torch.cat((q2.transpose(1,2), a), 1), beta)
+    #     s =  torch.bmm(torch.cat((q2.transpose(1,2), a), 1), beta).transpose(1,2)
+    #     #s = s[:, :-1, :]
+    #     s = torch.cat((s, c), 2) # B x m + 1 x 3l
+    #     s = F.dropout(s, self.drop_prob, self.training)
+    #     s = s[:, :-1, :]
+    #     #u = nn.LSTM(torch.cat([s, a], dim=2))
+    #     #u = torch.cat([s[:,:-1,:],a[:,:-1,:]], dim = 2)
              
-        return s
+    #     return s
 
 
-    def get_similarity_matrix(self, c, q):
-        """Get the "similarity matrix" between context and query (using the
-        terminology of the BiDAF paper).
+    # def get_similarity_matrix(self, c, q):
+    #     """Get the "similarity matrix" between context and query (using the
+    #     terminology of the BiDAF paper).
 
-        A naive implementation as described in BiDAF would concatenate the
-        three vectors then project the result with a single weight matrix. This
-        method is a more memory-efficient implementation of the same operation.
+    #     A naive implementation as described in BiDAF would concatenate the
+    #     three vectors then project the result with a single weight matrix. This
+    #     method is a more memory-efficient implementation of the same operation.
 
-        See Also:
-            Equation 1 in https://arxiv.org/abs/1611.01603
-        """
-        c_len, q_len = c.size(1), q.size(1)
-        c = F.dropout(c, self.drop_prob, self.training)  # (bs, c_len, hid_size)
-        q = F.dropout(q, self.drop_prob, self.training)  # (bs, q_len, hid_size)
+    #     See Also:
+    #         Equation 1 in https://arxiv.org/abs/1611.01603
+    #     """
+    #     c_len, q_len = c.size(1), q.size(1)
+    #     c = F.dropout(c, self.drop_prob, self.training)  # (bs, c_len, hid_size)
+    #     q = F.dropout(q, self.drop_prob, self.training)  # (bs, q_len, hid_size)
 
-        # Shapes: (batch_size, c_len, q_len)
-        s0 = torch.matmul(c, self.c_weight).expand([-1, -1, q_len])
-        s1 = torch.matmul(q, self.q_weight).transpose(1, 2)\
-                                           .expand([-1, c_len, -1])
-        s2 = torch.matmul(c * self.cq_weight, q.transpose(1, 2))
-        s = s0 + s1 + s2 + self.bias
+    #     # Shapes: (batch_size, c_len, q_len)
+    #     s0 = torch.matmul(c, self.c_weight).expand([-1, -1, q_len])
+    #     s1 = torch.matmul(q, self.q_weight).transpose(1, 2)\
+    #                                        .expand([-1, c_len, -1])
+    #     s2 = torch.matmul(c * self.cq_weight, q.transpose(1, 2))
+    #     s = s0 + s1 + s2 + self.bias
 
-        return s
+    #     return s
 
 
 class BiDAFOutput(nn.Module):
@@ -310,7 +310,7 @@ class BiDAFOutput(nn.Module):
     """
     def __init__(self, hidden_size, drop_prob):
         super(BiDAFOutput, self).__init__()
-        self.att_linear_1 = nn.Linear(6 * hidden_size, 1) # changed from 8 to 6
+        self.att_linear_1 = nn.Linear(8 * hidden_size, 1) # changed from 8 to 6
         self.mod_linear_1 = nn.Linear(2 * hidden_size, 1)
 
         self.rnn = RNNEncoder(input_size=2 * hidden_size,
@@ -318,7 +318,7 @@ class BiDAFOutput(nn.Module):
                               num_layers=1,
                               drop_prob=drop_prob)
 
-        self.att_linear_2 = nn.Linear(6 * hidden_size, 1) # changed from 8 to 6
+        self.att_linear_2 = nn.Linear(8 * hidden_size, 1) # changed from 8 to 6
         self.mod_linear_2 = nn.Linear(2 * hidden_size, 1)
 
     def forward(self, att, mod, mask):

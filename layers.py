@@ -270,29 +270,29 @@ class BiDAFAttention(nn.Module):
     #     return s
 
 
-    # def get_similarity_matrix(self, c, q):
-    #     """Get the "similarity matrix" between context and query (using the
-    #     terminology of the BiDAF paper).
+    def get_similarity_matrix(self, c, q):
+        """Get the "similarity matrix" between context and query (using the
+        terminology of the BiDAF paper).
 
-    #     A naive implementation as described in BiDAF would concatenate the
-    #     three vectors then project the result with a single weight matrix. This
-    #     method is a more memory-efficient implementation of the same operation.
+        A naive implementation as described in BiDAF would concatenate the
+        three vectors then project the result with a single weight matrix. This
+        method is a more memory-efficient implementation of the same operation.
 
-    #     See Also:
-    #         Equation 1 in https://arxiv.org/abs/1611.01603
-    #     """
-    #     c_len, q_len = c.size(1), q.size(1)
-    #     c = F.dropout(c, self.drop_prob, self.training)  # (bs, c_len, hid_size)
-    #     q = F.dropout(q, self.drop_prob, self.training)  # (bs, q_len, hid_size)
+        See Also:
+            Equation 1 in https://arxiv.org/abs/1611.01603
+        """
+        c_len, q_len = c.size(1), q.size(1)
+        c = F.dropout(c, self.drop_prob, self.training)  # (bs, c_len, hid_size)
+        q = F.dropout(q, self.drop_prob, self.training)  # (bs, q_len, hid_size)
 
-    #     # Shapes: (batch_size, c_len, q_len)
-    #     s0 = torch.matmul(c, self.c_weight).expand([-1, -1, q_len])
-    #     s1 = torch.matmul(q, self.q_weight).transpose(1, 2)\
-    #                                        .expand([-1, c_len, -1])
-    #     s2 = torch.matmul(c * self.cq_weight, q.transpose(1, 2))
-    #     s = s0 + s1 + s2 + self.bias
+        # Shapes: (batch_size, c_len, q_len)
+        s0 = torch.matmul(c, self.c_weight).expand([-1, -1, q_len])
+        s1 = torch.matmul(q, self.q_weight).transpose(1, 2)\
+                                           .expand([-1, c_len, -1])
+        s2 = torch.matmul(c * self.cq_weight, q.transpose(1, 2))
+        s = s0 + s1 + s2 + self.bias
 
-    #     return s
+        return s
 
 
 class BiDAFOutput(nn.Module):

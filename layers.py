@@ -7,7 +7,8 @@ Author:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import numpy as np
+import math
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from util import masked_softmax
 
@@ -103,6 +104,124 @@ class HighwayEncoder(nn.Module):
         return x
 
 
+# ----------------QANet-------------------
+
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, input_size, output_size, k):
+        super(DepthwiseSeparableConv, self).__init__()
+        # At groups= in_channels, each input channel is convolved with its own set of filters
+        self.depthwise_conv = nn.Conv1d(in_channels=input_size, out_channels=input_size, kernel_size=k, groups=input_size, padding = k//2)
+        self.pointwise_conv = nn.Conv1d(in_channels=input_size, out_channels=output_size, kernel_size=1)
+    def forward(self, x):
+        conv_output = self.depthwise_conv(x) # apps, apps, in_ch
+        conv_output = self.pointwise_conv(conv_output) # apps, apps, out_ch
+        return F.relu(conv_output)
+
+class SelfAttention(nn.Module):
+    def __init__(self, n_heads, n_embd, drop_prob):
+        super(SelfAttention, self).__init__()
+        self.key = nn.Linear(n_embd, n_embd)
+        self.query = nn.Linear(n_embd, n_embd)
+        self.value = nn.Linear(n_embd, n_embd)
+        # regularization
+        self.attn_drop = nn.Dropout(drop_prob)
+        self.resid_drop = nn.Dropout(drop_prob)
+        # output projection
+        self.proj = nn.Linear(n_embd, n_embd)
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        # self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size))
+        #                              .view(1, 1, config.block_size, config.block_size))
+        self.n_head = n_heads
+    def forward(self, x):
+        print(x.size())
+        B, T, C = x.size() # (B, l, d)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        # self.key(x) (B, l, d), make (B, l, h, d/h) transpose (B, h, l, d/h) l is block size
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        # att = att.masked_fill(self.mask[:,:,:T,:T] == 0, -1e10)
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_drop(self.proj(y))
+        return y
+
+# class PositionEncoding(nn.Module):
+#     def __init__(self, output_size):
+#         super(PositionEncoding, self).__init__()
+#     def forward(self, x):
+
+
+
+class EmbeddingEncoder(nn.Module):
+    def __init__(self,
+                 nconvs,
+                 input_size,
+                 output_size,
+                 k,
+                 drop_prob):
+        super(EmbeddingEncoder, self).__init__()
+        self.drop_prob = drop_prob
+        self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = output_size, kernel_size = 5, stride = 1, padding = 2)
+        self.conv_layers = nn.ModuleList([DepthwiseSeparableConv(output_size, output_size, k) for i in range(nconvs)]) # (bsz, seq_len, output_sz 128)
+        self.norm_layers = nn.ModuleList([nn.LayerNorm(output_size) for i in range(nconvs+2)])
+        self.attn = SelfAttention(n_heads = 8, n_embd = output_size, drop_prob = self.drop_prob) # (bsz, seq_len, output_sz)
+        self.ffn = nn.Conv1d(in_channels=output_size, out_channels=output_size, kernel_size=1) # cnn instead of ffn
+
+
+    def layer_dropout(self, inputs, residual, dropout):
+        i = np.random.uniform()
+        if i > self.drop_prob:
+            return F.dropout(inputs, dropout, self.training) + residual
+        else:
+            return residual
+
+
+    # def forward(self, x, start, total_layers):
+    def forward(self, x):
+        # print("rrrrr")
+        batch_size, seq_len, embed_size = x.shape
+        out = x.permute(0, 2, 1) # make ch_embed_size before char_limit to fit cnn
+        # print(out.shape)
+        out = self.cnn1(out)
+        # print(out.shape)
+        # print("lllllll")
+        for i, conv_layer in enumerate(self.conv_layers):
+            res = out
+            out = self.norm_layers[i](out.transpose(1,2)).transpose(1,2) # why transpose?????
+            # out = self.norm_layers[i](out)
+            out = conv_layer(out)
+            # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
+            out = self.layer_dropout(out, res, self.drop_prob)
+            # start += 1
+        res = out.transpose(1,2)
+        out = self.norm_layers[-2](out.transpose(1,2))
+        out = self.attn(out)
+        # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
+        out = self.layer_dropout(out, res, self.drop_prob)
+        # start += 1
+        res = out
+        out = self.norm_layers[-1](out)
+        out = self.ffn(out.permute(0, 2, 1)).permute(0, 2, 1)
+        # print('2')
+        # print(out.shape)
+        # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
+        out = self.layer_dropout(out, res, self.drop_prob)
+        # print('3')
+        # print(out.shape)
+        return out
+
+
+
+# ----------------QANet-------------------
 class RNNEncoder(nn.Module):
     """General-purpose layer for encoding a sequence using a bidirectional RNN.
 
@@ -175,25 +294,6 @@ class BiDAFAttention(nn.Module):
             nn.init.xavier_uniform_(weight)
         self.bias = nn.Parameter(torch.zeros(1))
 
-        # coattention version
-        # self.drop_prob = drop_prob
-        # self.c_weight = nn.Parameter(torch.zeros(hidden_size, 1))
-        # self.q_weight = nn.Parameter(torch.zeros(hidden_size, 1))
-        # self.cq_weight = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        # for weight in (self.c_weight, self.q_weight, self.cq_weight):
-        #     nn.init.xavier_uniform_(weight)
-        # self.bias = nn.Parameter(torch.zeros(1))
-        # ## qj = tanh(Wq + b)
-        # ## l is the dimension of q states, emb dim 1
-        
-        # self.coatt_weight = nn.Parameter(torch.zeros(hidden_size, hidden_size))
-        # self.coatt_bias = nn.Parameter(torch.zeros(hidden_size))
-        # self.q0 = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        # self.c0 = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        # self.rnn = nn.LSTM(hidden_size*2, hidden_size*2, 1,
-        #                    batch_first=True,
-        #                    bidirectional=True,
-        #                    dropout=0.)
 
     def forward(self, c, q, c_mask, q_mask):
         batch_size, c_len, _ = c.size()
@@ -212,62 +312,6 @@ class BiDAFAttention(nn.Module):
         x = torch.cat([c, a, c * a, c * b], dim=2)  # (bs, c_len, 4 * hid_size)
 
         return x
-
-        #oattention version 
-    #     batch_size, c_len, _ = c.size()
-    #     q_len = q.size(1)
-    #     s = self.get_similarity_matrix(c, q)        # (batch_size, c_len, q_len)
-    #     c_mask = c_mask.view(batch_size, c_len, 1)  # (batch_size, c_len, 1)
-    #     q_mask = q_mask.view(batch_size, 1, q_len)  # (batch_size, 1, q_len)   only 1d
-    #     s1 = masked_softmax(s, q_mask, dim=2)       # (batch_size, c_len, q_len)
-    #     s2 = masked_softmax(s, c_mask, dim=1)       # (batch_size, c_len, q_len)
-
-    #     # (bs, c_len, q_len) x (bs, q_len, hid_size) => (bs, c_len, hid_size)
-    #     a = torch.bmm(s1, q)
-    #     # (bs, c_len, c_len) x (bs, c_len, hid_size) => (bs, c_len, hid_size)
-    #     b = torch.bmm(torch.bmm(s1, s2.transpose(1, 2)), c)
-
-    #     x = torch.cat([c, a, c * a, c * b], dim=2)  # (bs, c_len, 4 * hid_size)
-
-        
-    #     ## draft downwards
-    #     ## q' = tanh(Wq + b)
-    #     #orch.matmul(c, self.c_weight).expand([-1, -1, q_len])
-        
-    #     q2 = F.tanh(torch.matmul(q, self.coatt_weight) + self.coatt_bias).view(q.size())
-
-    #     c = torch.cat([c, self.c0.expand(batch_size, 1, c.size()[2])], dim = 1)
-    #     q2 = torch.cat([q2, self.q0.expand(batch_size, 1, q2.size()[2])], dim = 1)
-    #     #q2 = q2.transpose(1,2) #B x n + 1 x l
-
-    #     #print(q2.shape, c.shape)
-    #     ## Lij = cj^t qj'
-    #     L = torch.bmm(q2, c.transpose(1,2)) #(m+1 n+1)
-    #     q_mask = torch.cat([q_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8).cuda()], dim = 2) ### cuda
-    #     c_mask = torch.cat([c_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8).cuda()], dim = 1)
-    #     # q_mask = torch.cat([q_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8)], dim = 2) ### cuda
-    #     # c_mask = torch.cat([c_mask, torch.zeros(batch_size, 1, 1, dtype = torch.uint8)], dim = 1)
-
-    #     ## a = softmax(Li:)
-    #     ##print(L.shape, q_mask.shape)
-    #     alpha = masked_softmax(L, q_mask.transpose(1,2), dim = 2) #(m+1 n+1)
-    #             ## a = sum aj qj
-    #     a = torch.bmm(c.transpose(1,2), alpha.transpose(1,2)) # b, l, n+1
-
-    #     beta = masked_softmax(L, c_mask.transpose(1,2), dim = 1) #(n+1 m+1)
-
-    #     #b = torch.bmm(beta, c)
-    #     #s = torch.bmm(alpha.transpose(1,2), b)
-    #     s = torch.bmm(torch.cat((q2.transpose(1,2), a), 1), beta)
-    #     s =  torch.bmm(torch.cat((q2.transpose(1,2), a), 1), beta).transpose(1,2)
-    #     #s = s[:, :-1, :]
-    #     s = torch.cat((s, c), 2) # B x m + 1 x 3l
-    #     s = F.dropout(s, self.drop_prob, self.training)
-    #     s = s[:, :-1, :]
-    #     #u = nn.LSTM(torch.cat([s, a], dim=2))
-    #     #u = torch.cat([s[:,:-1,:],a[:,:-1,:]], dim = 2)
-             
-    #     return s
 
 
     def get_similarity_matrix(self, c, q):

@@ -36,11 +36,16 @@ class BiDAF(nn.Module):
                                     hidden_size=hidden_size,
                                     drop_prob=drop_prob)
         new_hidden_size = 2 * hidden_size
-        self.enc = layers.RNNEncoder(input_size=new_hidden_size,
-                                     hidden_size=hidden_size,
-                                     num_layers=1,
-                                     drop_prob=drop_prob)
-
+        # self.enc = layers.RNNEncoder(input_size=new_hidden_size,
+        #                              hidden_size=hidden_size,
+        #                              num_layers=1,
+        #                              drop_prob=drop_prob)
+        self.enc = layers.EmbeddingEncoder(nconvs = 4, 
+                                           input_size = new_hidden_size, 
+                                           output_size = 128,
+                                           k = 7,
+                                           drop_prob=drop_prob)
+        hidden_size = int(128 / 2)
         self.att = layers.BiDAFAttention(hidden_size=2 * hidden_size,
                                          drop_prob=drop_prob)
 
@@ -80,8 +85,10 @@ class BiDAF(nn.Module):
         c_emb = self.emb(cw_idxs, cc_idxs)         # (batch_size, c_len, hidden_size)
         q_emb = self.emb(qw_idxs, qc_idxs)         # (batch_size, q_len, hidden_size)
 
-        c_enc = self.enc(c_emb, c_len)    # (batch_size, c_len, 2 * hidden_size)
-        q_enc = self.enc(q_emb, q_len)    # (batch_size, q_len, 2 * hidden_size)
+        # c_enc = self.enc(c_emb, c_len)    # (batch_size, c_len, 2 * hidden_size)
+        # q_enc = self.enc(q_emb, q_len)    # (batch_size, q_len, 2 * hidden_size)
+        c_enc = self.enc(c_emb)
+        q_enc = self.enc(q_emb)
 
         att = self.att(c_enc, q_enc,
                        c_mask, q_mask)    # (batch_size, c_len, 8 * hidden_size)

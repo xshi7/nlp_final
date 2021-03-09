@@ -133,7 +133,7 @@ class SelfAttention(nn.Module):
         #                              .view(1, 1, config.block_size, config.block_size))
         self.n_head = n_heads
     def forward(self, x):
-        print(x.size())
+        # print(x.size())
         B, T, C = x.size() # (B, l, d)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -220,6 +220,47 @@ class EmbeddingEncoder(nn.Module):
         return out
 
 
+class ModelEncoder(nn.Module):
+    def __init__(self,
+                 nconvs,
+                 input_size,
+                 output_size,
+                 num_blocks,
+                 k,
+                 drop_prob):
+        super(ModelEncoder, self).__init__()
+        self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = 128, kernel_size = 1, stride = 1, bias = False)
+        self.encoder_blocks = [EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size) for i in range(num_blocks)]
+
+    # def forward(self, x, start, total_layers):
+    def forward(self, x):
+
+        out = self.cnn1(x.permute(0, 2, 1)).permute(0, 2, 1)
+        for block in self.encoder_blocks:
+            out = block(out)
+        ME1 = out
+        for block in self.encoder_blocks:
+            out = block(out)
+        ME2 = out
+        for block in self.encoder_blocks:
+            out = block(out)
+        ME3 = out
+        return ME1, ME2, ME3
+
+class QANetOutput(nn.Module):
+    def __init__(self, input_size, drop_prob):
+        super(QANetOutput, self).__init__()
+        self.lin1 = nn.Linear(input_size * 2, 1)
+        self.lin2 = nn.Linear(input_size * 2, 1)
+    
+    def forward(self, ME1, ME2, ME3, mask):
+        output1 = torch.cat([ME1, ME2], dim=2)
+        output1 = self.lin1(output1).squeeze()
+        p1 = masked_softmax(output1, mask, log_softmax=True)
+        output2 = torch.cat([ME1, ME3], dim=2)
+        output2 = self.lin2(output2).squeeze()
+        p2 = masked_softmax(output2, mask, log_softmax=True)
+        return p1, p2
 
 # ----------------QANet-------------------
 class RNNEncoder(nn.Module):

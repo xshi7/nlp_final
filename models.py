@@ -49,12 +49,21 @@ class BiDAF(nn.Module):
         self.att = layers.BiDAFAttention(hidden_size=2 * hidden_size,
                                          drop_prob=drop_prob)
 
-        self.mod = layers.RNNEncoder(input_size=8  * hidden_size, # changed from 8 to 6
-                                     hidden_size=hidden_size,
-                                     num_layers=2,
-                                     drop_prob=drop_prob)
+        # self.mod = layers.RNNEncoder(input_size=8  * hidden_size, # changed from 8 to 6
+        #                              hidden_size=hidden_size,
+        #                              num_layers=2,
+        #                              drop_prob=drop_prob)
 
-        self.out = layers.BiDAFOutput(hidden_size=hidden_size,
+        self.mod = layers.ModelEncoder(nconvs=2, 
+                                       input_size = 8*hidden_size, 
+                                       num_blocks=7, 
+                                       k = 7, 
+                                       output_size = hidden_size * 2,
+                                       drop_prob=drop_prob)
+
+        # self.out = layers.BiDAFOutput(hidden_size=hidden_size,
+        #                               drop_prob=drop_prob)
+        self.out = layers.QANetOutput(input_size=hidden_size*2, 
                                       drop_prob=drop_prob)
 
     # def forward(self, cw_idxs, qw_idxs):
@@ -93,8 +102,10 @@ class BiDAF(nn.Module):
         att = self.att(c_enc, q_enc,
                        c_mask, q_mask)    # (batch_size, c_len, 8 * hidden_size)
 
-        mod = self.mod(att, c_len)        # (batch_size, c_len, 2 * hidden_size)
+        # mod = self.mod(att, c_len)        # (batch_size, c_len, 2 * hidden_size)
+        ME1, ME2, ME3 = self.mod(att)
 
-        out = self.out(att, mod, c_mask)  # 2 tensors, each (batch_size, c_len)
+        # out = self.out(att, mod, c_mask)  # 2 tensors, each (batch_size, c_len)
+        out = self.mod( ME1, ME2, ME3, c_mask)
 
         return out

@@ -106,6 +106,6 @@ class BiDAF(nn.Module):
         ME1, ME2, ME3 = self.mod(att)
 
         # out = self.out(att, mod, c_mask)  # 2 tensors, each (batch_size, c_len)
-        out = self.mod( ME1, ME2, ME3, c_mask)
+        out = self.out( ME1, ME2, ME3, c_mask)
 
         return out

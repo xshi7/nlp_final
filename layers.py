@@ -106,6 +106,24 @@ class HighwayEncoder(nn.Module):
 
 # ----------------QANet-------------------
 
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, input_size, output_size, k):
         super(DepthwiseSeparableConv, self).__init__()
@@ -170,6 +188,7 @@ class EmbeddingEncoder(nn.Module):
                  drop_prob):
         super(EmbeddingEncoder, self).__init__()
         self.drop_prob = drop_prob
+        self.pos_enc = PositionalEncoding(input_size)
         self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = output_size, kernel_size = 5, stride = 1, padding = 2)
         self.conv_layers = nn.ModuleList([DepthwiseSeparableConv(output_size, output_size, k) for i in range(nconvs)]) # (bsz, seq_len, output_sz 128)
         self.norm_layers = nn.ModuleList([nn.LayerNorm(output_size) for i in range(nconvs+2)])
@@ -189,6 +208,7 @@ class EmbeddingEncoder(nn.Module):
     def forward(self, x):
         # print("rrrrr")
         batch_size, seq_len, embed_size = x.shape
+        out = self.pos_enc(x)
         out = x.permute(0, 2, 1) # make ch_embed_size before char_limit to fit cnn
         # print(out.shape)
         out = self.cnn1(out)
@@ -230,7 +250,7 @@ class ModelEncoder(nn.Module):
                  drop_prob):
         super(ModelEncoder, self).__init__()
         self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = 128, kernel_size = 1, stride = 1, bias = False)
-        self.encoder_blocks = [EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size) for i in range(num_blocks)]
+        self.encoder_blocks = nn.ModuleList([EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size) for i in range(num_blocks)])
 
     # def forward(self, x, start, total_layers):
     def forward(self, x):

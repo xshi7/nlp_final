@@ -28,11 +28,14 @@ class Embedding(nn.Module):
         super(Embedding, self).__init__()
         self.drop_prob = drop_prob
         self.embed = nn.Embedding.from_pretrained(word_vectors)
-        self.char_embed = nn.Embedding.from_pretrained(char_vectors) # (batch_size, seq_len, char_limit, ch_embed_size) 
+        # self.char_embed = nn.Embedding.from_pretrained(char_vectors) # (batch_size, seq_len, char_limit, ch_embed_size) 
+        self.char_embed = nn.Embedding(num_embeddings=char_vectors.size(0), embedding_dim=200)
         self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
 
         self.out_channels = 100
-        self.cnn1 = nn.Conv1d(in_channels =char_vectors.shape[1], out_channels = self.out_channels, kernel_size = 5, stride = 1)
+        # self.cnn1 = nn.Conv1d(in_channels =char_vectors.shape[1], out_channels = self.out_channels, kernel_size = 5, stride = 1)
+        self.cnn1 = nn.Conv1d(in_channels =200, out_channels = self.out_channels, kernel_size = 5, stride = 1)
+
         self.hwy = HighwayEncoder(2, hidden_size + self.out_channels)
     # def forward(self, x):
     #     emb = self.embed(x)   # (batch_size, seq_len, embed_size)
@@ -172,10 +175,6 @@ class SelfAttention(nn.Module):
         y = self.resid_drop(self.proj(y))
         return y
 
-# class PositionEncoding(nn.Module):
-#     def __init__(self, output_size):
-#         super(PositionEncoding, self).__init__()
-#     def forward(self, x):
 
 
 
@@ -216,7 +215,7 @@ class EmbeddingEncoder(nn.Module):
         # print("lllllll")
         for i, conv_layer in enumerate(self.conv_layers):
             res = out
-            out = self.norm_layers[i](out.transpose(1,2)).transpose(1,2) # why transpose?????
+            out = self.norm_layers[i](out.transpose(1,2)).transpose(1,2)
             # out = self.norm_layers[i](out)
             out = conv_layer(out)
             # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)

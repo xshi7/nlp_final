@@ -35,18 +35,18 @@ class BiDAF(nn.Module):
                                     char_vectors = char_vectors,
                                     hidden_size=hidden_size,
                                     drop_prob=drop_prob)
-        new_hidden_size = 2 * hidden_size
+        # new_hidden_size = 2 * hidden_size
         # self.enc = layers.RNNEncoder(input_size=new_hidden_size,
         #                              hidden_size=hidden_size,
         #                              num_layers=1,
         #                              drop_prob=drop_prob)
         self.enc = layers.EmbeddingEncoder(nconvs = 4, 
-                                           input_size = new_hidden_size, 
-                                           output_size = 128,
+                                           input_size = hidden_size, 
+                                           output_size = hidden_size,
                                            k = 7,
                                            drop_prob=drop_prob)
-        hidden_size = int(128 / 2)
-        self.att = layers.BiDAFAttention(hidden_size=2 * hidden_size,
+        # hidden_size = int(128 / 2)
+        self.att = layers.BiDAFAttention(hidden_size=hidden_size,
                                          drop_prob=drop_prob)
 
         # self.mod = layers.RNNEncoder(input_size=8  * hidden_size, # changed from 8 to 6
@@ -55,15 +55,15 @@ class BiDAF(nn.Module):
         #                              drop_prob=drop_prob)
 
         self.mod = layers.ModelEncoder(nconvs=2, 
-                                       input_size = 8*hidden_size, 
+                                       input_size = 4*hidden_size, 
                                        num_blocks=7, 
                                        k = 7, 
-                                       output_size = hidden_size * 2,
+                                       output_size = hidden_size,
                                        drop_prob=drop_prob)
 
         # self.out = layers.BiDAFOutput(hidden_size=hidden_size,
         #                               drop_prob=drop_prob)
-        self.out = layers.QANetOutput(input_size=hidden_size*2, 
+        self.out = layers.QANetOutput(input_size=hidden_size, 
                                       drop_prob=drop_prob)
 
     # def forward(self, cw_idxs, qw_idxs):

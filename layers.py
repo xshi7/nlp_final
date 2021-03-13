@@ -29,14 +29,15 @@ class Embedding(nn.Module):
         self.drop_prob = drop_prob
         self.embed = nn.Embedding.from_pretrained(word_vectors)
         # self.char_embed = nn.Embedding.from_pretrained(char_vectors) # (batch_size, seq_len, char_limit, ch_embed_size) 
-        self.char_embed = nn.Embedding(num_embeddings=char_vectors.size(0), embedding_dim=200)
-        self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
+        self.char_embed = nn.Embedding(num_embeddings=char_vectors.size(0), embedding_dim=char_vectors.size(1))
+        # self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
 
-        self.out_channels = 100
+        self.out_channels = 200
         # self.cnn1 = nn.Conv1d(in_channels =char_vectors.shape[1], out_channels = self.out_channels, kernel_size = 5, stride = 1)
-        self.cnn1 = nn.Conv1d(in_channels =200, out_channels = self.out_channels, kernel_size = 5, stride = 1)
+        self.cnn1 = nn.Conv1d(in_channels =char_vectors.size(1), out_channels = self.out_channels, kernel_size = 5, stride = 1)
+        self.proj = nn.Linear(word_vectors.size(1) + self.out_channels, hidden_size, bias=False)
 
-        self.hwy = HighwayEncoder(2, hidden_size + self.out_channels)
+        self.hwy = HighwayEncoder(2, hidden_size)
     # def forward(self, x):
     #     emb = self.embed(x)   # (batch_size, seq_len, embed_size)
     #     emb = F.dropout(emb, self.drop_prob, self.training)
@@ -55,7 +56,6 @@ class Embedding(nn.Module):
         # emb ([64, 341, 300])
         emb = self.embed(x)   # (batch_size, seq_len, embed_size)
         emb = F.dropout(emb, self.drop_prob, self.training)
-        emb = self.proj(emb)  # (batch_size, seq_len, hidden_size)
 
 
         char_emb = self.char_embed(char) # (batch_size, seq_len, char_limit, ch_embed_size) ([64, 341, 16, 64])
@@ -72,6 +72,7 @@ class Embedding(nn.Module):
         # print(emb.shape)
 
         total_emb = torch.cat([emb, char_emb], dim = -1)
+        total_emb = self.proj(total_emb)  # (batch_size, seq_len, hidden_size)
 
         total_emb = self.hwy(total_emb)   # (batch_size, seq_len, hidden_size)
 
@@ -188,19 +189,25 @@ class EmbeddingEncoder(nn.Module):
         super(EmbeddingEncoder, self).__init__()
         self.drop_prob = drop_prob
         self.pos_enc = PositionalEncoding(input_size)
-        self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = output_size, kernel_size = 5, stride = 1, padding = 2)
-        self.conv_layers = nn.ModuleList([DepthwiseSeparableConv(output_size, output_size, k) for i in range(nconvs)]) # (bsz, seq_len, output_sz 128)
+        # self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = output_size, kernel_size = 5, stride = 1, padding = 2)
+        # self.conv_layers = nn.ModuleList([DepthwiseSeparableConv(input_size, output_size, k)] + \
+        #     [DepthwiseSeparableConv(output_size, output_size, k) for i in range(nconvs - 1)]) # (bsz, seq_len, output_sz 128)
+        self.conv_layers = nn.ModuleList([DepthwiseSeparableConv(output_size, output_size, k) for i in range(nconvs)])
         self.norm_layers = nn.ModuleList([nn.LayerNorm(output_size) for i in range(nconvs+2)])
+        # self.norm_layers = nn.ModuleList([nn.LayerNorm(input_size)] + \
+        #     [nn.LayerNorm(output_size) for i in range(nconvs+1)])
         self.attn = SelfAttention(n_heads = 8, n_embd = output_size, drop_prob = self.drop_prob) # (bsz, seq_len, output_sz)
         self.ffn = nn.Conv1d(in_channels=output_size, out_channels=output_size, kernel_size=1) # cnn instead of ffn
 
 
+    # def layer_dropout(self, inputs, residual, dropout):
+    #     i = np.random.uniform()
+    #     if i > self.drop_prob:
+    #         return F.dropout(inputs, dropout, self.training) + residual
+    #     else:
+    #         return residual
     def layer_dropout(self, inputs, residual, dropout):
-        i = np.random.uniform()
-        if i > self.drop_prob:
-            return F.dropout(inputs, dropout, self.training) + residual
-        else:
-            return residual
+            return residual + inputs
 
 
     # def forward(self, x, start, total_layers):
@@ -210,7 +217,7 @@ class EmbeddingEncoder(nn.Module):
         out = self.pos_enc(x)
         out = x.permute(0, 2, 1) # make ch_embed_size before char_limit to fit cnn
         # print(out.shape)
-        out = self.cnn1(out)
+        # out = self.cnn1(out)
         # print(out.shape)
         # print("lllllll")
         for i, conv_layer in enumerate(self.conv_layers):
@@ -218,6 +225,7 @@ class EmbeddingEncoder(nn.Module):
             out = self.norm_layers[i](out.transpose(1,2)).transpose(1,2)
             # out = self.norm_layers[i](out)
             out = conv_layer(out)
+            # print(out.shape)
             # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
             out = self.layer_dropout(out, res, self.drop_prob)
             # start += 1
@@ -248,13 +256,15 @@ class ModelEncoder(nn.Module):
                  k,
                  drop_prob):
         super(ModelEncoder, self).__init__()
-        self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = 128, kernel_size = 1, stride = 1, bias = False)
+        # self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = 128, kernel_size = 1, stride = 1, bias = False)
+        self.proj = nn.Linear(input_size, output_size, bias=False)
         self.encoder_blocks = nn.ModuleList([EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size) for i in range(num_blocks)])
 
     # def forward(self, x, start, total_layers):
     def forward(self, x):
 
-        out = self.cnn1(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # out = self.cnn1(x.permute(0, 2, 1)).permute(0, 2, 1)
+        out = self.proj(x)
         for block in self.encoder_blocks:
             out = block(out)
         ME1 = out

@@ -44,7 +44,8 @@ class BiDAF(nn.Module):
                                            input_size = hidden_size, 
                                            output_size = hidden_size,
                                            k = 7,
-                                           drop_prob=drop_prob)
+                                           drop_prob=drop_prob,
+                                           num_blocks=1)
         # hidden_size = int(128 / 2)
         self.att = layers.BiDAFAttention(hidden_size=hidden_size,
                                          drop_prob=drop_prob)

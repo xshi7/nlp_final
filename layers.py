@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from util import masked_softmax
 
 
-class Embedding(nn.Module):
+class Embedding1(nn.Module):
     """Embedding layer used by BiDAF, without the character-level component.
 
     Word-level embeddings are further refined using a 2-layer Highway Encoder
@@ -35,7 +35,7 @@ class Embedding(nn.Module):
         self.out_channels = 200
         # self.cnn1 = nn.Conv1d(in_channels =char_vectors.shape[1], out_channels = self.out_channels, kernel_size = 5, stride = 1)
         self.cnn1 = nn.Conv1d(in_channels =char_vectors.size(1), out_channels = self.out_channels, kernel_size = 5, stride = 1)
-        self.proj = nn.Linear(word_vectors.size(1) + self.out_channels, hidden_size, bias=False)
+        self.proj = nn.Sequential(nn.Linear(word_vectors.size(1) + self.out_channels, hidden_size, bias=False), nn.ReLU())
 
         self.hwy = HighwayEncoder(2, hidden_size)
     # def forward(self, x):
@@ -55,7 +55,6 @@ class Embedding(nn.Module):
         # char ([64, 341, 16])
         # emb ([64, 341, 300])
         emb = self.embed(x)   # (batch_size, seq_len, embed_size)
-        emb = F.dropout(emb, self.drop_prob, self.training)
 
 
         char_emb = self.char_embed(char) # (batch_size, seq_len, char_limit, ch_embed_size) ([64, 341, 16, 64])
@@ -72,12 +71,57 @@ class Embedding(nn.Module):
         # print(emb.shape)
 
         total_emb = torch.cat([emb, char_emb], dim = -1)
+        total_emb = F.dropout(total_emb, self.drop_prob, self.training)
         total_emb = self.proj(total_emb)  # (batch_size, seq_len, hidden_size)
 
         total_emb = self.hwy(total_emb)   # (batch_size, seq_len, hidden_size)
 
         return total_emb
 
+class Embedding(nn.Module):
+    """Embedding layer used by BiDAF, without the character-level component.
+    Word-level embeddings are further refined using a 2-layer Highway Encoder
+    (see `HighwayEncoder` class for details).
+    Args:
+        word_vectors (torch.Tensor): Pre-trained word vectors.
+        hidden_size (int): Size of hidden activations.
+        drop_prob (float): Probability of zero-ing out activations
+    """
+    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob):
+        super(Embedding, self).__init__()
+        self.drop_prob = drop_prob
+        self.embed = nn.Embedding.from_pretrained(word_vectors)
+        self.char_embed = nn.Embedding.from_pretrained(char_vectors) # (batch_size, seq_len, char_limit, ch_embed_size) 
+        self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
+        self.out_channels = 100
+        self.cnn1 = nn.Conv1d(in_channels =char_vectors.shape[1], out_channels = self.out_channels, kernel_size = 5, stride = 1)
+        self.hwy = HighwayEncoder(2, hidden_size + self.out_channels)
+        self.proj_out = nn.Sequential(nn.Linear(hidden_size + self.out_channels, hidden_size, bias=False), nn.ReLU())
+
+
+    def forward(self, x, char):
+        # x ([64, 341])
+        # char ([64, 341, 16])
+        # emb ([64, 341, 300])
+        emb = self.embed(x)   # (batch_size, seq_len, embed_size)
+        emb = F.dropout(emb, self.drop_prob, self.training)
+        emb = self.proj(emb)  # (batch_size, seq_len, hidden_size)
+        char_emb = self.char_embed(char) # (batch_size, seq_len, char_limit, ch_embed_size) ([64, 341, 16, 64])
+        batch_size, seq_len, char_limit, ch_embed_size = char_emb.shape
+        char_emb = char_emb.view(batch_size * seq_len, char_limit, ch_embed_size) # cnn takes 3 dimensional input
+        char_emb = char_emb.permute(0, 2, 1) # make ch_embed_size before char_limit to fit cnn
+        # print(char_emb.shape) # ([20864, 64, 16])
+        char_emb = self.cnn1(char_emb)
+        # print(char_emb)
+        char_emb = F.relu(char_emb)
+        char_emb = torch.max(char_emb, dim = -1)[0]
+        char_emb = char_emb.view(batch_size, seq_len, self.out_channels)
+        # print(char_emb.shape)
+        # print(emb.shape)
+        total_emb = torch.cat([emb, char_emb], dim = -1)
+        total_emb = self.hwy(total_emb)   # (batch_size, seq_len, hidden_size)
+        total_emb = self.proj_out(total_emb)
+        return total_emb
 
 class HighwayEncoder(nn.Module):
     """Encode an input sequence using a highway network.
@@ -185,8 +229,11 @@ class EmbeddingEncoder(nn.Module):
                  input_size,
                  output_size,
                  k,
-                 drop_prob):
+                 drop_prob,
+                 num_blocks):
         super(EmbeddingEncoder, self).__init__()
+        self.num_blocks = num_blocks
+        self.conv_num = nconvs
         self.drop_prob = drop_prob
         self.pos_enc = PositionalEncoding(input_size)
         # self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = output_size, kernel_size = 5, stride = 1, padding = 2)
@@ -196,7 +243,7 @@ class EmbeddingEncoder(nn.Module):
         self.norm_layers = nn.ModuleList([nn.LayerNorm(output_size) for i in range(nconvs+2)])
         # self.norm_layers = nn.ModuleList([nn.LayerNorm(input_size)] + \
         #     [nn.LayerNorm(output_size) for i in range(nconvs+1)])
-        self.attn = SelfAttention(n_heads = 8, n_embd = output_size, drop_prob = self.drop_prob) # (bsz, seq_len, output_sz)
+        self.attn = SelfAttention(n_heads = 4, n_embd = output_size, drop_prob = self.drop_prob) # (bsz, seq_len, output_sz)
         self.ffn = nn.Conv1d(in_channels=output_size, out_channels=output_size, kernel_size=1) # cnn instead of ffn
 
 
@@ -207,12 +254,23 @@ class EmbeddingEncoder(nn.Module):
     #     else:
     #         return residual
     def layer_dropout(self, inputs, residual, dropout):
+        if self.training == True:
+            pred = torch.empty(1).uniform_(0,1) < dropout
+            if pred:
+                return residual
+            else:
+                return F.dropout(inputs, dropout, training=self.training) + residual
+        else:
+            return inputs + residual
+
+    def res_block(self, inputs, residual):
             return residual + inputs
 
 
     # def forward(self, x, start, total_layers):
     def forward(self, x):
         # print("rrrrr")
+        total_layers = (self.conv_num+1)*self.num_blocks
         batch_size, seq_len, embed_size = x.shape
         out = self.pos_enc(x)
         out = x.permute(0, 2, 1) # make ch_embed_size before char_limit to fit cnn
@@ -227,13 +285,13 @@ class EmbeddingEncoder(nn.Module):
             out = conv_layer(out)
             # print(out.shape)
             # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
-            out = self.layer_dropout(out, res, self.drop_prob)
+            out = self.layer_dropout(out, res, self.drop_prob * (i + 1)/total_layers)
             # start += 1
         res = out.transpose(1,2)
         out = self.norm_layers[-2](out.transpose(1,2))
         out = self.attn(out)
         # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
-        out = self.layer_dropout(out, res, self.drop_prob)
+        out = self.res_block(out, res)
         # start += 1
         res = out
         out = self.norm_layers[-1](out)
@@ -241,7 +299,7 @@ class EmbeddingEncoder(nn.Module):
         # print('2')
         # print(out.shape)
         # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
-        out = self.layer_dropout(out, res, self.drop_prob)
+        out = self.res_block(out, res)
         # print('3')
         # print(out.shape)
         return out
@@ -258,22 +316,21 @@ class ModelEncoder(nn.Module):
         super(ModelEncoder, self).__init__()
         # self.cnn1 = nn.Conv1d(in_channels =input_size, out_channels = 128, kernel_size = 1, stride = 1, bias = False)
         self.proj = nn.Linear(input_size, output_size, bias=False)
-        self.encoder_blocks = nn.ModuleList([EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size) for i in range(num_blocks)])
+        self.encoder_blocks = nn.ModuleList([EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size, num_blocks=num_blocks) for i in range(num_blocks)])
 
     # def forward(self, x, start, total_layers):
     def forward(self, x):
 
         # out = self.cnn1(x.permute(0, 2, 1)).permute(0, 2, 1)
-        out = self.proj(x)
+        ME1 = self.proj(x)
         for block in self.encoder_blocks:
-            out = block(out)
-        ME1 = out
+            ME1 = block(ME1)
+        ME2 = ME1
         for block in self.encoder_blocks:
-            out = block(out)
-        ME2 = out
+            ME2 = block(ME2)
+        ME3 = ME2
         for block in self.encoder_blocks:
-            out = block(out)
-        ME3 = out
+            ME3 = block(ME3)
         return ME1, ME2, ME3
 
 class QANetOutput(nn.Module):

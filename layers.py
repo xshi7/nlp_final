@@ -197,8 +197,9 @@ class SelfAttention(nn.Module):
         # causal mask to ensure that attention is only applied to the left in the input sequence
         # self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size))
         #                              .view(1, 1, config.block_size, config.block_size))
+        self.mask = None
         self.n_head = n_heads
-    def forward(self, x):
+    def forward(self, x, mask):
         # print(x.size())
         B, T, C = x.size() # (B, l, d)
 
@@ -210,8 +211,17 @@ class SelfAttention(nn.Module):
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        # att = att.masked_fill(self.mask[:,:,:T,:T] == 0, -1e10)
-        att = F.softmax(att, dim=-1)
+        # len = mask.sum(-1) # mask (B)
+        # self.mask = torch.ones(T, T).view(1, 1, T, T)
+        # self.mask = self.mask.masked_fill()
+        self.mask = mask.view(B, 1, T, 1)
+        self.mask = self.mask @ self.mask.transpose(2, 3)
+        # print(self.mask[0])
+        att = att.masked_fill(self.mask == 0, -1e10)
+        # att = F.softmax(att, dim=-1)
+        # print(att.shape)
+        # print(mask.shape)
+        # att = masked_softmax(att, mask, log_softmax=True, dim = -1)
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -268,7 +278,7 @@ class EmbeddingEncoder(nn.Module):
 
 
     # def forward(self, x, start, total_layers):
-    def forward(self, x):
+    def forward(self, x, mask):
         # print("rrrrr")
         total_layers = (self.conv_num+1)*self.num_blocks
         batch_size, seq_len, embed_size = x.shape
@@ -289,7 +299,7 @@ class EmbeddingEncoder(nn.Module):
             # start += 1
         res = out.transpose(1,2)
         out = self.norm_layers[-2](out.transpose(1,2))
-        out = self.attn(out)
+        out = self.attn(out, mask)
         # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
         out = self.res_block(out, res)
         # start += 1
@@ -297,7 +307,7 @@ class EmbeddingEncoder(nn.Module):
         out = self.norm_layers[-1](out)
         out = self.ffn(out.permute(0, 2, 1)).permute(0, 2, 1)
         # print('2')
-        # print(out.shape)
+        print(out.shape)
         # out = self.layer_dropout(out, res, self.drop_prob * start / total_layers)
         out = self.res_block(out, res)
         # print('3')
@@ -319,18 +329,18 @@ class ModelEncoder(nn.Module):
         self.encoder_blocks = nn.ModuleList([EmbeddingEncoder(nconvs = nconvs, input_size = 128, k = 7, drop_prob = drop_prob, output_size = output_size, num_blocks=num_blocks) for i in range(num_blocks)])
 
     # def forward(self, x, start, total_layers):
-    def forward(self, x):
+    def forward(self, x, mask):
 
         # out = self.cnn1(x.permute(0, 2, 1)).permute(0, 2, 1)
         ME1 = self.proj(x)
         for block in self.encoder_blocks:
-            ME1 = block(ME1)
+            ME1 = block(ME1, mask)
         ME2 = ME1
         for block in self.encoder_blocks:
-            ME2 = block(ME2)
+            ME2 = block(ME2, mask)
         ME3 = ME2
         for block in self.encoder_blocks:
-            ME3 = block(ME3)
+            ME3 = block(ME3, mask)
         return ME1, ME2, ME3
 
 class QANetOutput(nn.Module):
